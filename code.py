@@ -182,33 +182,6 @@ async def tcpPost(packet):
     print(f"{stamp}: [{config.call}] AprsTCPSend: {packet}")
     await asyncio.sleep(0)
 
-async def httpPost(packet,rssi,snr):
-    await asyncio.sleep(0)
-    json_data = {
-        "call": config.call,
-        "lat": config.latitude,
-        "lon": config.longitude,
-        "alt": config.altitude,
-        "comment": config.comment,
-        "symbol": config.symbol,
-        "token": config.token,
-        "raw": packet,
-        "rssi": rssi,
-        "snr": snr,
-    }
-
-    try:
-        response = requests.post(config.url + '/' + config.token, json=json_data)
-        response.close()
-        stamp = datetime.now()
-        print(f"{stamp}: [{config.call}] AprsRestSend: {packet}")
-        await asyncio.sleep(0)
-    except:
-        stamp = datetime.now()
-        print("{0}: [{1}] AprsRestSend: Lost Packet, unable post {2} to {3}".format(stamp, config.call, packet, config.url))
-        print(f"{stamp}: [{config.call}] AprsRestSend: Restarting system !")
-        microcontroller.reset()
-
 
 async def loraRunner(loop):
     # LoRa APRS frequency
@@ -232,8 +205,6 @@ async def loraRunner(loop):
                     print(f"\r{stamp}: [{config.call}] loraRunner: RSSI:{rfm9x.last_rssi} SNR:{rfm9x.last_snr} Data:{rawdata}")
                     wifi.pixel_status((100,100,0))
                     loop.create_task(tcpPost(rawdata))
-                    if config.enable is True:
-                        loop.create_task(httpPost(rawdata,rfm9x.last_rssi,rfm9x.last_snr))
                     wifi.pixel_status((0,100,0))
                 except:
                     print(f"{stamp}: [{config.call}] loraRunner: Lost Packet, unable to decode, skipping")
