@@ -16,6 +16,8 @@ from APRS import APRS
 import random
 import config
 import microcontroller
+from secrets import secrets
+
 
 # reset to normal mode
 microcontroller.on_next_reset(microcontroller.RunMode.NORMAL)
