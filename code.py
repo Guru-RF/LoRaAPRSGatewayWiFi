@@ -17,6 +17,8 @@ import random
 import config
 from microcontroller import watchdog as w
 from watchdog import WatchDogMode
+import microcontroller
+from secrets import secrets
 
 # our version
 VERSION = "RF.Guru_APRSiGate 0.1" 
