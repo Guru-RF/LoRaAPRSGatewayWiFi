@@ -10,7 +10,6 @@ from adafruit_esp32spi import PWMOut
 import adafruit_rgbled
 import adafruit_requests as requests
 import asyncio
-import microcontroller
 from adafruit_datetime import datetime
 from APRS import APRS
 import random

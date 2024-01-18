@@ -9,4 +9,4 @@ altitude = 46 # in meters
 comment = "https://rf.guru LoraAPRSiGate v0.1"
 symbol = "La"
 timeout = 900 # time to wait for an APRS packet higher 
-biasT = True
+biasT = False # enable biasT for LNA @ antenna
