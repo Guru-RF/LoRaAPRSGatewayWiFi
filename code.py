@@ -15,20 +15,57 @@ from adafruit_datetime import datetime
 from APRS import APRS
 import random
 import config
-import microcontroller
-
-# reset to normal mode
-microcontroller.on_next_reset(microcontroller.RunMode.NORMAL)
+from microcontroller import watchdog as w
+from watchdog import WatchDogMode
 
 # our version
-VERSION = "RF.Guru_APRSGateway 0.1" 
+VERSION = "RF.Guru_APRSiGate 0.1" 
 
-print(f"{config.call} -=- {VERSION}\n")
+def _format_datetime(datetime):
+  return "{:02}/{:02}/{} {:02}:{:02}:{:02}".format(
+    datetime.tm_mon,
+    datetime.tm_mday,
+    datetime.tm_year,
+    datetime.tm_hour,
+    datetime.tm_min,
+    datetime.tm_sec,
+  )
+
+def purple(data):
+  stamp = "{}".format(_format_datetime(time.localtime()))
+  return "\x1b[38;5;104m[" + str(stamp) + "] " + data + "\x1b[0m"
+
+def green(data):
+  stamp = "{}".format(_format_datetime(time.localtime()))
+  return "\r\x1b[38;5;112m[" + str(stamp) + "] " + data + "\x1b[0m"
+
+def blue(data):
+  stamp = "{}".format(_format_datetime(time.localtime()))
+  return "\x1b[38;5;14m[" + str(stamp) + "] " + data + "\x1b[0m"
+
+def yellow(data):
+  return "\x1b[38;5;220m" + data + "\x1b[0m"
+
+def red(data):
+  return "\x1b[1;5;31m -- " + data + "\x1b[0m"
+
+# configure biasT
+biasT = DigitalInOut(board.GP0)
+biasT.direction = Direction.OUTPUT
+biasT.value = False
+
+if config.biasT is True:
+    biasT.value = True
+
+# wait for console
+time.sleep(2)
+
+print(red(f"{config.call} -=- {VERSION}\n"))
 
 try:
     from secrets import secrets
 except ImportError:
-    print("WiFi secrets are kept in secrets.py, please add them there!")
+    print(red("WiFi secrets are kept in secrets.py, please add them there!"))
     raise
 
 esp32_cs = DigitalInOut(board.GP17)
@@ -40,9 +77,9 @@ spi = busio.SPI(board.GP18, board.GP19, board.GP16)
 esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 
 if esp.status == adafruit_esp32spi.WL_IDLE_STATUS:
-      print("ESP32 found and in idle mode")
-print("Firmware vers.", esp.firmware_version)
-print("MAC addr:", [hex(i) for i in esp.MAC_address])
+      print(yellow("ESP32 found and in idle mode"))
+print(yellow("Firmware version: " + (esp.firmware_version).decode("utf-8")))
+print(yellow("MAC addr: " + str([hex(i) for i in esp.MAC_address])))
 
 RED_LED = PWMOut.PWMOut(esp, 25)
 GREEN_LED = PWMOut.PWMOut(esp, 26)
@@ -50,20 +87,26 @@ BLUE_LED = PWMOut.PWMOut(esp, 27)
 status_light = adafruit_rgbled.RGBLED(RED_LED, GREEN_LED, BLUE_LED)
 wifi = adafruit_esp32spi_wifimanager.ESPSPI_WiFiManager(esp, secrets, status_light)
 
-
 ## Connect to WiFi
-print("Connecting to WiFi...")
+print(yellow("Connecting to WiFi..."))
 wifi.connect()
-print("Connected!")
+print(yellow("Connected!"))
   
-print("Connected to", str(esp.ssid, "utf-8"), "\tRSSI:", esp.rssi)
+print(yellow("Connected to: [" + str(esp.ssid, "utf-8") + "]\tRSSI:" + str(esp.rssi)))
+print()
 
 # Initialize a requests object with a socket and esp32spi interface
 socket.set_interface(esp)
 requests.set_socket(socket, esp)
 
+# configure watchdog
+w.timeout=5
+w.mode = WatchDogMode.RESET
+w.feed()
+
 now = None
 while now is None:
+    w.feed()
     try:
         now = time.localtime(esp.get_time()[0])
     except OSError:
@@ -77,7 +120,6 @@ s.settimeout(10)
 try:
     socketaddr = socket.getaddrinfo(config.aprs_host, config.aprs_port)[0][4]
     s.connect(socketaddr)
-    stamp = datetime.now()
     aprs = APRS()
     pos = aprs.makePosition(config.latitude, config.longitude, -1, -1, config.symbol)
     altitude = "/A={:06d}".format(int(config.altitude*3.2808399))
@@ -87,25 +129,24 @@ try:
     s.send(bytes(message, 'utf-8'))
     message = f'{config.call}>APRFGI,TCPIP*:@{ts}{pos}{comment}\n'
     s.send(bytes(message, 'utf-8'))
-    print(f"{stamp}: [{config.call}] iGatePossition: {message}", end="")
+    print(purple(f"[{config.call}] iGatePossition: {message}"), end="")
     wifi.pixel_status((0,100,0))
 except:
-    stamp = datetime.now()
-    print(f"{stamp}: [{config.call}] Connect to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting System !")
+    print(purple(f"[{config.call}] Connect to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting System !"))
     microcontroller.reset()
 
 
 async def iGateAnnounce():
     global s
     while True:
+        w.feed()
         temp = microcontroller.cpus[0].temperature
         freq = microcontroller.cpus[1].frequency/1000000
         rawpacket = f'{config.call}>APRFGI,TCPIP*:>Running on RP2040 t:{temp}C f:{freq}Mhz\n'
         try:
             s.send(bytes(rawpacket, 'utf-8'))
         except:
-            stamp = datetime.now()
-            print(f"{stamp}: [{config.call}] iGateStatus: Reconnecting to ARPS {config.aprs_host} {config.aprs_port}")
+            print(purple(f"[{config.call}] iGateStatus: Reconnecting to ARPS {config.aprs_host} {config.aprs_port}"))
             s.close()
             socket.set_interface(esp)
             requests.set_socket(socket, esp)
@@ -118,12 +159,9 @@ async def iGateAnnounce():
                 s.send(bytes(rawauthpacket, 'utf-8'))
                 s.send(bytes(rawpacket, 'utf-8'))
             except:
-                stamp = datetime.now()
-                print(f"{stamp}: [{config.call}] Connect to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting system !")
+                print(purple(f"[{config.call}] Connect to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting system !"))
                 microcontroller.reset()
-        stamp = datetime.now()
-        print(f"{stamp}: [{config.call}] iGateStatus: {rawpacket}", end="")
-        stamp = datetime.now()
+        print(purple(f"[{config.call}] iGateStatus: {rawpacket}"),end="")
         aprs = APRS()
         pos = aprs.makePosition(config.latitude, config.longitude, -1, -1, config.symbol)
         altitude = "/A={:06d}".format(int(config.altitude*3.2808399))
@@ -133,8 +171,7 @@ async def iGateAnnounce():
         try:
             s.send(bytes(message, 'utf-8'))
         except:
-            stamp = datetime.now()
-            print(f"{stamp}: [{config.call}] iGateStatus: Reconnecting to ARPS {config.aprs_host} {config.aprs_port}")
+            print(purple(f"[{config.call}] iGateStatus: Reconnecting to ARPS {config.aprs_host} {config.aprs_port}"))
             s.close()
             socket.set_interface(esp)
             requests.set_socket(socket, esp)
@@ -147,11 +184,10 @@ async def iGateAnnounce():
                 s.send(bytes(rawauthpacket, 'utf-8'))
                 s.send(bytes(message, 'utf-8'))
             except:
-                stamp = datetime.now()
-                print(f"{stamp}: [{config.call}] iGateStatus: Connect to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting system !")
+                print(purple(f"[{config.call}] iGateStatus: Connect to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting system !"))
                 microcontroller.reset()
         
-        print(f"{stamp}: [{config.call}] iGatePossition: {message}", end="")
+        print(purple(f"[{config.call}] iGatePossition: {message}"),end="")
         await asyncio.sleep(15*60)
 
 
@@ -161,8 +197,7 @@ async def tcpPost(packet):
     try:
         s.send(bytes(rawpacket, 'utf-8'))
     except:
-        stamp = datetime.now()
-        print(f"{stamp}: [{config.call}] AprsTCPSend: Reconnecting to ARPS {config.aprs_host} {config.aprs_port}")
+        print(purple(f"[{config.call}] AprsTCPSend: Reconnecting to ARPS {config.aprs_host} {config.aprs_port}"))
         s.close()
         socket.set_interface(esp)
         requests.set_socket(socket, esp)
@@ -175,15 +210,13 @@ async def tcpPost(packet):
             s.send(bytes(rawauthpacket, 'utf-8'))
             s.send(bytes(rawpacket, 'utf-8'))
         except:
-            stamp = datetime.now()
-            print(f"{stamp}: [{config.call}] AprsTCPSend: Reconnecting to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting system !")
+            print(purple(f"[{config.call}] AprsTCPSend: Reconnecting to ARPS {config.aprs_host} {config.aprs_port} Failed ! Lost Packet ! Restarting system !"))
             microcontroller.reset()
-    stamp = datetime.now()
-    print(f"{stamp}: [{config.call}] AprsTCPSend: {packet}")
+    print(blue(f"[{config.call}] AprsTCPSend: {packet}"))
     await asyncio.sleep(0)
 
 
-async def loraRunner(loop):
+async def loraRunner(loop,w):
     # LoRa APRS frequency
     RADIO_FREQ_MHZ = 433.775
     CS = DigitalInOut(board.GP21)
@@ -193,27 +226,25 @@ async def loraRunner(loop):
 
     while True:
         await asyncio.sleep(0)
-        stamp = datetime.now()
-        print(f"{stamp}: [{config.call}] loraRunner: Waiting for lora APRS packet ...\r", end="")
         timeout = int(config.timeout) + random.randint(1, 9)
-        packet = rfm9x.receive(with_header=True,timeout=timeout)
+        print(purple(f"[{config.call}] loraRunner: Waiting for lora APRS packet timeout:{timeout} ...\r"),end="")
+        packet = rfm9x.receive(w,with_header=True,timeout=timeout)
         if packet is not None:
             if packet[:3] == (b'<\xff\x01'):
                 try:
                     rawdata = bytes(packet[3:]).decode('utf-8')
-                    stamp = datetime.now()
-                    print(f"\r{stamp}: [{config.call}] loraRunner: RSSI:{rfm9x.last_rssi} SNR:{rfm9x.last_snr} Data:{rawdata}")
+                    print(green(f"[{config.call}] loraRunner: RSSI:{rfm9x.last_rssi} SNR:{rfm9x.last_snr} Data:{rawdata}"))
                     wifi.pixel_status((100,100,0))
                     loop.create_task(tcpPost(rawdata))
                     wifi.pixel_status((0,100,0))
                 except:
-                    print(f"{stamp}: [{config.call}] loraRunner: Lost Packet, unable to decode, skipping")
+                    print(purple(f"[{config.call}] loraRunner: Lost Packet, unable to decode, skipping"))
                     continue
 
 
 async def main():
    loop = asyncio.get_event_loop()
-   loraR = asyncio.create_task(loraRunner(loop))
+   loraR = asyncio.create_task(loraRunner(loop,w))
    loraA = asyncio.create_task(iGateAnnounce())
    await asyncio.gather(loraR, loraA)
 
